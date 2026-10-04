@@ -1,2 +1,34 @@
-# Divar_webscraping for Apartment sells 
-Divar (Persian: دیوار; lit. "wall") is an Iranian Persian classified ads and E-commerce mobile app, and an online platform for users in Iran founded in Iran in 2012 with sections devoted to real estate, vehicles, goods, community service. This web crawler is developed by JSON format which is much quicker than other Libraries . Also it can be adopted for other categories of Divar.ir .In this Project particularly is developed for apartment-sells in Tehran.Iran.
+# Divar Web Scraping – آپارتمان فروشی تهران
+
+اسکرپر سبک و سریع برای دریافت آگهی‌های **فروش آپارتمان در تهران** از سایت دیوار با استفاده از API عمومی.
+
+## ویژگی‌ها
+- استفاده مستقیم از API دیوار (سریع‌تر از Selenium / BeautifulSoup)
+- جمع‌آوری اطلاعات کامل هر آگهی:
+  - محله، طبقه، سال ساخت، تعداد اتاق، متراژ
+  - آسانسور، پارکینگ، انباری
+  - قیمت کل و قیمت هر متر
+  - مختصات جغرافیایی (در صورت وجود)
+- ذخیره خروجی به فایل Excel
+
+## پیش‌نیاز
+- پایتون ۳.۸ یا بالاتر
+- اتصال اینترنت (در بسیاری از مواقع نیاز به VPN یا IP ایران دارید)
+
+```bash
+pip install -r requirements.txt
+```
+
+## نحوه اجرا
+
+```bash
+python divar_scraper.py
+```
+
+تعداد آگهی‌های مورد نظر را وارد کنید. فایل خروجی با نام `Divar_houses_data.xlsx` ساخته می‌شود.
+
+## نکته مهم
+API دیوار ممکن است در آینده تغییر کند یا محدودیت‌هایی اعمال کند. در صورت بروز خطا، کد را متناسب با ساختار جدید پاسخ API به‌روزرسانی کنید.
+
+## لایسنس
+Apache License 2.0
