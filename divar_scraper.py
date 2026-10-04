@@ -1,12 +1,13 @@
 """
 Divar Apartment Sales Scraper (Tehran)
 Scrapes apartment-for-sale listings from Divar.ir using the public API.
-Saves results to an Excel file.
+Saves results to an Excel file in the user's Downloads folder.
 """
 
 import requests
 import time
 import pandas as pd
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 
@@ -25,7 +26,14 @@ HEADERS = {
     "Accept": "application/json",
 }
 REQUEST_DELAY = 0.7  # seconds between detail requests (avoid 429)
-OUTPUT_FILE = "Divar_houses_data.xlsx"
+OUTPUT_FILENAME = "Divar_houses_data.xlsx"
+
+
+def get_downloads_path() -> Path:
+    """Return the path to the user's Downloads folder (cross-platform)."""
+    downloads = Path.home() / "Downloads"
+    downloads.mkdir(parents=True, exist_ok=True)  # create if it doesn't exist
+    return downloads
 
 
 def get_initial_pagination(session: requests.Session) -> tuple[Optional[str], Optional[str]]:
@@ -262,8 +270,9 @@ def main():
 
     if ads:
         df = pd.DataFrame(ads)
-        df.to_excel(OUTPUT_FILE, index=False)
-        print(f"\n✅ Done! {len(ads)} ads saved to → {OUTPUT_FILE}")
+        output_path = get_downloads_path() / OUTPUT_FILENAME
+        df.to_excel(output_path, index=False)
+        print(f"\n✅ Done! {len(ads)} ads saved to → {output_path}")
     else:
         print("\nNo data collected. Excel file was not created.")
 
