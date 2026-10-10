@@ -2,6 +2,10 @@
 Divar Apartment Sales Scraper (Tehran)
 Scrapes apartment-for-sale listings from Divar.ir using the public API.
 Saves results to an Excel file in the user's Downloads folder.
+
+Also extracts:
+- لینک آگهی (always available)
+- شماره تلفن (requires Divar login / JWT token)
 """
 
 import requests
@@ -14,6 +18,7 @@ from typing import List, Dict, Any, Optional
 # ---------------------------- Configuration ----------------------------
 SEARCH_URL = "https://api.divar.ir/v8/postlist/w/search"
 POST_URL_TEMPLATE = "https://api.divar.ir/v8/posts-v2/web/{token}"
+CONTACT_URL_TEMPLATE = "https://api.divar.ir/v8/postcontact/web/contact_info/{token}"
 CITY_ID = "1"  # Tehran
 CATEGORY = "apartment-sell"
 HEADERS = {
@@ -28,11 +33,16 @@ HEADERS = {
 REQUEST_DELAY = 0.7  # seconds between detail requests (avoid 429)
 OUTPUT_FILENAME = "Divar_houses_data.xlsx"
 
+# Optional: put your Divar JWT token here to enable phone extraction.
+# How to get it: log in to divar.ir in browser → DevTools → Application → Cookies → token
+# Or use Authorization: Basic <token>
+DIVAR_JWT = ""  # e.g. "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+
 
 def get_downloads_path() -> Path:
     """Return the path to the user's Downloads folder (cross-platform)."""
     downloads = Path.home() / "Downloads"
-    downloads.mkdir(parents=True, exist_ok=True)  # create if it doesn't exist
+    downloads.mkdir(parents=True, exist_ok=True)
     return downloads
 
 
@@ -103,7 +113,6 @@ def collect_tokens(
                 print("[INFO] No more listings found.")
                 break
 
-            # Update pagination for next page
             pag = data.get("pagination", {}).get("data", {})
             last_post_date = pag.get("last_post_date", last_post_date)
             search_uid = pag.get("search_uid", search_uid)
@@ -138,9 +147,11 @@ def safe_get(d: dict, *keys, default="ندارد"):
     return d if d is not None else default
 
 
-def extract_ad_details(data: Dict[str, Any]) -> Dict[str, Any]:
+def extract_ad_details(data: Dict[str, Any], token: str) -> Dict[str, Any]:
     """Parse a single post detail response into a flat dictionary."""
     ad = {
+        "لینک آگهی": f"https://divar.ir/v/{token}",
+        "شماره تلفن": "ندارد",
         "محله": "ندارد",
         "طبقه": "ندارد",
         "سال ساخت": "ندارد",
@@ -155,12 +166,10 @@ def extract_ad_details(data: Dict[str, Any]) -> Dict[str, Any]:
         "نقطه طولی": "ندارد",
     }
 
-    # District & price from webengage (more reliable)
     webengage = data.get("webengage", {})
     ad["محله"] = webengage.get("district", "ندارد")
     ad["قیمت کل"] = webengage.get("price", "ندارد")
 
-    # Walk through sections → widgets
     for section in data.get("sections", []):
         for widget in section.get("widgets", []):
             wtype = widget.get("widget_type")
@@ -173,7 +182,6 @@ def extract_ad_details(data: Dict[str, Any]) -> Dict[str, Any]:
                     ad["نقطه طولی"] = point.get("longitude", "ندارد")
 
             elif wtype == "GROUP_INFO_ROW":
-                # Contains items like متراژ, سال ساخت, تعداد اتاق, etc.
                 for item in wdata.get("items", []):
                     title = item.get("title", "")
                     value = item.get("value", "ندارد")
@@ -193,10 +201,8 @@ def extract_ad_details(data: Dict[str, Any]) -> Dict[str, Any]:
                     ad["قیمت هر متر"] = value
 
             elif wtype == "FEATURE_ROW":
-                # Features: آسانسور، پارکینگ، انباری
                 for feature in wdata.get("features", []):
                     title = feature.get("title", "")
-                    # presence is usually indicated by the feature existing
                     if "آسانسور" in title:
                         ad["آسانسور"] = True
                     elif "پارکینگ" in title:
@@ -204,19 +210,51 @@ def extract_ad_details(data: Dict[str, Any]) -> Dict[str, Any]:
                     elif "انباری" in title:
                         ad["انباری"] = True
 
-    # Fallbacks for boolean features (if not found → ندارد)
-    for key in ("آسانسور", "پارکینگ", "انباری"):
-        if ad[key] is True:
-            continue
-        if ad[key] == "ندارد":
-            # keep ندارد
-            pass
-
     return ad
 
 
+def fetch_phone(session: requests.Session, token: str) -> str:
+    """Try to get the seller phone number. Requires valid JWT."""
+    if not DIVAR_JWT:
+        return "نیاز به لاگین (توکن تنظیم نشده)"
+
+    url = CONTACT_URL_TEMPLATE.format(token=token)
+    headers = HEADERS.copy()
+    headers["Authorization"] = f"Basic {DIVAR_JWT}"
+
+    try:
+        resp = session.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return f"خطا {resp.status_code}"
+
+        data = resp.json()
+        # Common response shapes
+        widget_list = data.get("widget_list") or data.get("widgets") or []
+        if isinstance(widget_list, dict):
+            # older format
+            contact = widget_list.get("contact", {})
+            phone = contact.get("phone")
+            if phone:
+                return phone
+
+        for widget in widget_list if isinstance(widget_list, list) else []:
+            wdata = widget.get("data", {})
+            # try several known paths
+            phone = (
+                wdata.get("value")
+                or safe_get(wdata, "action", "payload", "phone_number", default=None)
+                or wdata.get("phone")
+            )
+            if phone and str(phone).startswith("09"):
+                return str(phone)
+
+        return "شماره مخفی / فقط چت"
+    except Exception as e:
+        return f"خطا: {e}"
+
+
 def fetch_ad_details(session: requests.Session, tokens: List[str]) -> List[Dict[str, Any]]:
-    """Fetch full details for each token."""
+    """Fetch full details for each token (including link + phone)."""
     ads = []
     for idx, token in enumerate(tokens, 1):
         url = POST_URL_TEMPLATE.format(token=token)
@@ -224,9 +262,14 @@ def fetch_ad_details(session: requests.Session, tokens: List[str]) -> List[Dict[
             resp = session.get(url, headers=HEADERS, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
-                ad = extract_ad_details(data)
+                ad = extract_ad_details(data, token)
+                # try to get phone
+                ad["شماره تلفن"] = fetch_phone(session, token)
                 ads.append(ad)
-                print(f"[{idx}/{len(tokens)}] {ad['محله']} | {ad['متراژ']}m | {ad['قیمت کل']}")
+                print(
+                    f"[{idx}/{len(tokens)}] {ad['محله']} | {ad['متراژ']}m | "
+                    f"{ad['قیمت کل']} | {ad['شماره تلفن']}"
+                )
             else:
                 print(f"[{idx}/{len(tokens)}] Failed – status {resp.status_code}")
         except Exception as e:
@@ -240,41 +283,53 @@ def fetch_ad_details(session: requests.Session, tokens: List[str]) -> List[Dict[
 def main():
     print("=" * 60)
     print("  Divar Apartment-Sell Scraper (Tehran)")
+    print("  + لینک آگهی + شماره تلفن")
     print("=" * 60)
 
+    if not DIVAR_JWT:
+        print("\n⚠️  توکن لاگین تنظیم نشده → شماره تلفن استخراج نمی‌شود.")
+        print("   برای گرفتن شماره: در فایل، متغیر DIVAR_JWT را با توکن دیوار پر کنید.\n")
+
     try:
-        number = int(input("How many advertisements do you want to retrieve? "))
+        number = int(input("چند آگهی می‌خواهید دریافت کنید؟ "))
         if number <= 0:
-            print("Please enter a positive number.")
+            print("لطفاً عدد مثبت وارد کنید.")
             return
     except ValueError:
-        print("Invalid input. Please enter an integer.")
+        print("ورودی نامعتبر. لطفاً یک عدد وارد کنید.")
         return
 
     session = requests.Session()
 
-    print("\n[1/3] Getting initial search pagination...")
+    print("\n[1/3] گرفتن pagination اولیه...")
     last_post_date, search_uid = get_initial_pagination(session)
     if not last_post_date or not search_uid:
         return
 
-    print("[2/3] Collecting advertisement tokens...")
+    print("[2/3] جمع‌آوری توکن آگهی‌ها...")
     tokens = collect_tokens(session, number, last_post_date, search_uid)
     if not tokens:
-        print("No tokens collected. Exiting.")
+        print("هیچ توکنی جمع نشد. خروج.")
         return
-    print(f"→ Got {len(tokens)} tokens")
+    print(f"→ {len(tokens)} توکن گرفته شد")
 
-    print("\n[3/3] Fetching full advertisement details...")
+    print("\n[3/3] دریافت جزئیات کامل آگهی‌ها (لینک + شماره)...")
     ads = fetch_ad_details(session, tokens)
 
     if ads:
         df = pd.DataFrame(ads)
+        # ترتیب ستون‌ها
+        cols = [
+            "لینک آگهی", "شماره تلفن", "محله", "متراژ", "قیمت کل", "قیمت هر متر",
+            "تعداد اتاق", "سال ساخت", "طبقه", "آسانسور", "پارکینگ", "انباری",
+            "نقطه عرضی", "نقطه طولی",
+        ]
+        df = df[[c for c in cols if c in df.columns]]
         output_path = get_downloads_path() / OUTPUT_FILENAME
         df.to_excel(output_path, index=False)
-        print(f"\n✅ Done! {len(ads)} ads saved to → {output_path}")
+        print(f"\n✅ تمام! {len(ads)} آگهی ذخیره شد → {output_path}")
     else:
-        print("\nNo data collected. Excel file was not created.")
+        print("\nهیچ داده‌ای جمع نشد. فایل اکسل ساخته نشد.")
 
 
 if __name__ == "__main__":
