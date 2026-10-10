@@ -4,8 +4,8 @@ Scrapes apartment-for-sale listings from Divar.ir using the public API.
 Saves results to an Excel file in the user's Downloads folder.
 
 Also extracts:
-- لینک آگهی (always available)
-- شماره تلفن (requires Divar login / JWT token)
+- Ad link (always available)
+- Phone number (requires Divar login / JWT token)
 """
 
 import requests
@@ -216,7 +216,7 @@ def extract_ad_details(data: Dict[str, Any], token: str) -> Dict[str, Any]:
 def fetch_phone(session: requests.Session, token: str) -> str:
     """Try to get the seller phone number. Requires valid JWT."""
     if not DIVAR_JWT:
-        return "نیاز به لاگین (توکن تنظیم نشده)"
+        return "Login required (token not set)"
 
     url = CONTACT_URL_TEMPLATE.format(token=token)
     headers = HEADERS.copy()
@@ -225,7 +225,7 @@ def fetch_phone(session: requests.Session, token: str) -> str:
     try:
         resp = session.get(url, headers=headers, timeout=10)
         if resp.status_code != 200:
-            return f"خطا {resp.status_code}"
+            return f"Error {resp.status_code}"
 
         data = resp.json()
         # Common response shapes
@@ -248,9 +248,9 @@ def fetch_phone(session: requests.Session, token: str) -> str:
             if phone and str(phone).startswith("09"):
                 return str(phone)
 
-        return "شماره مخفی / فقط چت"
+        return "Hidden / Chat only"
     except Exception as e:
-        return f"خطا: {e}"
+        return f"Error: {e}"
 
 
 def fetch_ad_details(session: requests.Session, tokens: List[str]) -> List[Dict[str, Any]]:
@@ -283,42 +283,42 @@ def fetch_ad_details(session: requests.Session, tokens: List[str]) -> List[Dict[
 def main():
     print("=" * 60)
     print("  Divar Apartment-Sell Scraper (Tehran)")
-    print("  + لینک آگهی + شماره تلفن")
+    print("  + Ad Link + Phone Number")
     print("=" * 60)
 
     if not DIVAR_JWT:
-        print("\n⚠️  توکن لاگین تنظیم نشده → شماره تلفن استخراج نمی‌شود.")
-        print("   برای گرفتن شماره: در فایل، متغیر DIVAR_JWT را با توکن دیوار پر کنید.\n")
+        print("\n⚠️  Login token is not set → phone numbers will not be extracted.")
+        print("   To enable phone extraction: set the DIVAR_JWT variable in the script.\n")
 
     try:
-        number = int(input("چند آگهی می‌خواهید دریافت کنید؟ "))
+        number = int(input("How many advertisements do you want to retrieve? "))
         if number <= 0:
-            print("لطفاً عدد مثبت وارد کنید.")
+            print("Please enter a positive number.")
             return
     except ValueError:
-        print("ورودی نامعتبر. لطفاً یک عدد وارد کنید.")
+        print("Invalid input. Please enter an integer.")
         return
 
     session = requests.Session()
 
-    print("\n[1/3] گرفتن pagination اولیه...")
+    print("\n[1/3] Getting initial search pagination...")
     last_post_date, search_uid = get_initial_pagination(session)
     if not last_post_date or not search_uid:
         return
 
-    print("[2/3] جمع‌آوری توکن آگهی‌ها...")
+    print("[2/3] Collecting advertisement tokens...")
     tokens = collect_tokens(session, number, last_post_date, search_uid)
     if not tokens:
-        print("هیچ توکنی جمع نشد. خروج.")
+        print("No tokens collected. Exiting.")
         return
-    print(f"→ {len(tokens)} توکن گرفته شد")
+    print(f"→ Got {len(tokens)} tokens")
 
-    print("\n[3/3] دریافت جزئیات کامل آگهی‌ها (لینک + شماره)...")
+    print("\n[3/3] Fetching full advertisement details (link + phone)...")
     ads = fetch_ad_details(session, tokens)
 
     if ads:
         df = pd.DataFrame(ads)
-        # ترتیب ستون‌ها
+        # Column order
         cols = [
             "لینک آگهی", "شماره تلفن", "محله", "متراژ", "قیمت کل", "قیمت هر متر",
             "تعداد اتاق", "سال ساخت", "طبقه", "آسانسور", "پارکینگ", "انباری",
@@ -327,9 +327,9 @@ def main():
         df = df[[c for c in cols if c in df.columns]]
         output_path = get_downloads_path() / OUTPUT_FILENAME
         df.to_excel(output_path, index=False)
-        print(f"\n✅ تمام! {len(ads)} آگهی ذخیره شد → {output_path}")
+        print(f"\n✅ Done! {len(ads)} ads saved to → {output_path}")
     else:
-        print("\nهیچ داده‌ای جمع نشد. فایل اکسل ساخته نشد.")
+        print("\nNo data collected. Excel file was not created.")
 
 
 if __name__ == "__main__":
